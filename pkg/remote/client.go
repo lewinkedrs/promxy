@@ -26,6 +26,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/prometheus/common/model"
+	"github.com/prometheus/common/sigv4"
 	"github.com/prometheus/common/version"
 
 	config_util "github.com/prometheus/common/config"
@@ -49,6 +50,8 @@ type ClientConfig struct {
 	URL              *config_util.URL
 	Timeout          model.Duration
 	HTTPClientConfig config_util.HTTPClientConfig
+	SigV4Config      *sigv4.SigV4Config
+	Headers          map[string]string
 }
 
 // NewClient creates a new Client.
@@ -57,6 +60,18 @@ func NewClient(index int, conf *ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	t := httpClient.Transport
+
+	if conf.SigV4Config != nil {
+		t, err = sigv4.NewSigV4RoundTripper(conf.SigV4Config, httpClient.Transport)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if len(conf.Headers) > 0 {
+		t = newInjectHeadersRoundTripper(conf.Headers, t)
+	}
 
 	return &Client{
 		index:   index,
@@ -64,6 +79,15 @@ func NewClient(index int, conf *ClientConfig) (*Client, error) {
 		client:  httpClient,
 		timeout: time.Duration(conf.Timeout),
 	}, nil
+}
+
+func newInjectHeadersRoundTripper(h map[string]string, underlyingRT http.RoundTripper) *injectHeadersRoundTripper {
+	return &injectHeadersRoundTripper{headers: h, RoundTripper: underlyingRT}
+}
+
+type injectHeadersRoundTripper struct {
+	headers map[string]string
+	http.RoundTripper
 }
 
 type recoverableError struct {
